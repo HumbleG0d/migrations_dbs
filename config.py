@@ -28,10 +28,10 @@ REPORTS_DIR.mkdir(exist_ok=True)
 MSSQL_CONFIG = {
     "driver":   "ODBC Driver 17 for SQL Server",
     "server":   os.environ.get("MSSQL_SERVER", "localhost"),
-    "database": os.environ.get("MSSQL_DATABASE", "dbajemex"),
-    "username": os.environ.get("MSSQL_USER", "sa"),
+    "database": os.environ.get("MSSQL_DATABASE", "MXDBAJE"),      # Nombre real de la DB
+    "username": os.environ.get("MSSQL_USER", ""),
     "password": os.environ.get("MSSQL_PASSWORD", ""),
-    "trusted_connection": os.environ.get("MSSQL_TRUSTED", "no"),  # "yes" para Windows Auth
+    "trusted_connection": os.environ.get("MSSQL_TRUSTED", "yes"),  # Windows Auth activo
 }
 
 def get_mssql_connection_string() -> str:
@@ -103,8 +103,15 @@ class MigrationConfig:
     log_dir: Path = field(default_factory=lambda: LOGS_DIR)
     reports_dir: Path = field(default_factory=lambda: REPORTS_DIR)
 
-    # Esquemas de SQL Server a migrar (None = todos)
-    include_schemas: list = field(default_factory=lambda: ["dbo"])
+    # Esquemas de SQL Server a migrar — incluye todos los schemas con datos
+    include_schemas: list = field(default_factory=lambda: [
+        "dbo",
+        "AJE\\karla.ramirez.mx",
+        "AJE\\tania.ordonez",
+        "AJE\\cristopher.osomo.mx",
+        "AJE\\dulce.espinosa.mx",
+        "SQLcompliance_Data_Change",
+    ])
 
     # Tablas a excluir explícitamente (ej. tablas de sistema)
     exclude_tables: list = field(default_factory=list)
@@ -118,3 +125,34 @@ class MigrationConfig:
 
 # Instancia global de configuración (importar desde aquí)
 MIGRATION = MigrationConfig()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mapeo de nombres de schema: SQL Server → PostgreSQL
+#
+# PostgreSQL NO acepta backslashes ni puntos en nombres de schema.
+# Este diccionario traduce el nombre original de MSSQL al nombre seguro en PG.
+# ─────────────────────────────────────────────────────────────────────────────
+SCHEMA_NAME_MAP: dict[str, str] = {
+    "dbo":                        "dbo",
+    "AJE\\karla.ramirez.mx":      "aje_karla_ramirez_mx",
+    "AJE\\tania.ordonez":         "aje_tania_ordonez",
+    "AJE\\cristopher.osomo.mx":   "aje_cristopher_osomo_mx",
+    "AJE\\dulce.espinosa.mx":     "aje_dulce_espinosa_mx",
+    "SQLcompliance_Data_Change":  "sqlcompliance_data_change",
+}
+
+
+def sanitize_schema_name(mssql_schema: str) -> str:
+    """
+    Convierte un nombre de schema de SQL Server a un nombre válido en PostgreSQL.
+    Si no hay mapeo explícito, aplica una sanitización automática:
+    reemplaza caracteres inválidos por guión bajo y convierte a minúsculas.
+    """
+    if mssql_schema in SCHEMA_NAME_MAP:
+        return SCHEMA_NAME_MAP[mssql_schema]
+    # Fallback automático: reemplazar \ . @ - por _ y lowercase
+    sanitized = mssql_schema.lower()
+    for char in ("\\", ".", "@", "-", " "):
+        sanitized = sanitized.replace(char, "_")
+    return sanitized

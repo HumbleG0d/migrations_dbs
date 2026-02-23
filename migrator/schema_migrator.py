@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import pyodbc
 import psycopg2
 
-from config import MIGRATION, get_mssql_connection_string, get_postgres_dsn
+from config import MIGRATION, get_mssql_connection_string, get_postgres_dsn, sanitize_schema_name
 from migrator.type_mapper import map_column
 
 logger = logging.getLogger(__name__)
@@ -43,13 +43,24 @@ class ColumnInfo:
 
 @dataclass
 class TableInfo:
-    schema: str
+    schema: str          # Nombre original en SQL Server (puede tener \ o .)
     name: str
     columns: list[ColumnInfo]
+    pg_schema: str = ""  # Nombre sanitizado para PostgreSQL (sin caracteres inválidos)
+
+    def __post_init__(self) -> None:
+        if not self.pg_schema:
+            self.pg_schema = sanitize_schema_name(self.schema)
 
     @property
     def full_name(self) -> str:
+        """Nombre completo en SQL Server (origen)."""
         return f"{self.schema}.{self.name}"
+
+    @property
+    def pg_full_name(self) -> str:
+        """Nombre completo en PostgreSQL (destino)."""
+        return f"{self.pg_schema}.{self.name}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,11 +237,11 @@ class SchemaMigrator:
 
     def _create_table(self, pg_conn: psycopg2.extensions.connection, table: TableInfo) -> None:
         ddl = self._build_create_table_ddl(table)
-        logger.debug("DDL generado para %s:\n%s", table.full_name, ddl)
+        logger.debug("DDL generado para %s:\n%s", table.pg_full_name, ddl)
         cursor = pg_conn.cursor()
-        # Crear schema si no existe
+        # Usar el nombre sanitizado del schema en PostgreSQL
         cursor.execute(
-            f'CREATE SCHEMA IF NOT EXISTS "{table.schema}"'
+            f'CREATE SCHEMA IF NOT EXISTS "{table.pg_schema}"'
         )
         cursor.execute(ddl)
 
@@ -248,8 +259,9 @@ class SchemaMigrator:
             col_defs.append(f'    "{col.name}" {pg_type}{nullable_clause}')
 
         cols_sql = ",\n".join(col_defs)
+        # Usar pg_schema (nombre sanitizado) para el CREATE TABLE en PostgreSQL
         return (
-            f'CREATE TABLE IF NOT EXISTS "{table.schema}"."{table.name}" (\n'
+            f'CREATE TABLE IF NOT EXISTS "{table.pg_schema}"."{table.name}" (\n'
             f"{cols_sql}\n"
             f");"
         )
